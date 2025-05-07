@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 import os
 from PIL import Image
 
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision.models import resnet50, ResNet50_Weights
 from yolo_loss import YoloLoss
 
 
@@ -18,12 +18,12 @@ class YOLOResNetDetector(nn.Module):
         self.output_dim = num_boxes * (5 + num_classes)
 
         if pretrained:
-            resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+            resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
         else:
-            resnet = resnet18(weights=None)
+            resnet = resnet50(weights=None)
 
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])
-        self.head = nn.Conv2d(512, self.output_dim, kernel_size=1)
+        self.head = nn.Conv2d(2048, self.output_dim, kernel_size=1)
 
     def forward(self, x):
         x = self.backbone(x)

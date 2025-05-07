@@ -17,7 +17,7 @@ def apply_pruning(model, amount=0.3):
     print("✅ Pruning applied to Conv2d layers")
 
 
-def train_and_save(pretrained=True, save_dir="models", epochs=5):
+def train_and_save(pretrained=True, save_dir="models", epochs=10):
     label = 'pretrained' if pretrained else 'scratch'
 
     # === Model and setup ===
@@ -27,7 +27,7 @@ def train_and_save(pretrained=True, save_dir="models", epochs=5):
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.5)
 
     dataset = BoatBirdDataset('./filtered_coco_yolo', split='train')
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
+    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=2, pin_memory=True)
 
     # === Training Loop ===
     model.train()
