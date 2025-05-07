@@ -8,6 +8,8 @@ from task1_ResNet import YOLOResNetDetector, BoatBirdDataset
 from yolo_loss import YoloLoss
 import torch.nn.utils.prune as prune
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def apply_pruning(model, amount=0.3):
     for module in model.modules():
@@ -17,17 +19,18 @@ def apply_pruning(model, amount=0.3):
     print("✅ Pruning applied to Conv2d layers")
 
 
-def train_and_save(pretrained=True, save_dir="models", epochs=10):
+def train_and_save(pretrained=True, save_dir="models", epochs=20):
     label = 'pretrained' if pretrained else 'scratch'
 
     # === Model and setup ===
     model = YOLOResNetDetector(pretrained=pretrained).to(device)
     criterion = YoloLoss(S=7, B=2, C=2)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    gradient_clip_value = 1.0
 
     dataset = BoatBirdDataset('./filtered_coco_yolo', split='train')
-    loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=2, pin_memory=True)
+    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
 
     # === Training Loop ===
     model.train()
@@ -36,19 +39,23 @@ def train_and_save(pretrained=True, save_dir="models", epochs=10):
     start_time = time.time()
     for epoch in range(epochs):
         pbar = tqdm(loader, desc=f"[{label}] Epoch {epoch + 1}/{epochs}")
+        epoch_loss = 0
         for imgs, targets in pbar:
             imgs, targets = imgs.to(device), targets.to(device)
             preds = model(imgs)
             loss = criterion(preds, targets)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_value)
             optimizer.step()
+            epoch_loss += loss.item()
             losses.append(loss.item())
             pbar.set_postfix(loss=loss.item())
-        scheduler.step()
+        scheduler.step(epoch_loss)
 
-    # === Post-training Pruning ===
-    apply_pruning(model)
+        # Apply pruning every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            apply_pruning(model)
 
     # === Save model ===
     duration = time.time() - start_time
@@ -59,6 +66,5 @@ def train_and_save(pretrained=True, save_dir="models", epochs=10):
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_and_save(pretrained=True)
     train_and_save(pretrained=False)
