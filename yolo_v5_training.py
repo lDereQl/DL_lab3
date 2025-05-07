@@ -1,8 +1,6 @@
 import torch
 import torch.optim as optim
-import torchvision
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
-from torch.utils.data import DataLoader
 from yolo_dataset_loader import get_dataloader
 import matplotlib.pyplot as plt
 
@@ -12,22 +10,13 @@ NUM_CLASSES = 2  # boat and bird
 NUM_EPOCHS = 20
 LEARNING_RATE = 1e-4
 BATCH_SIZE = 8
-MODEL_PATH = 'yolov5_boat_bird.pth'
 
 # === Load Datasets ===
 train_loader, val_loader = get_dataloader(BATCH_SIZE)
 
-# === Model Definition ===
-model = fasterrcnn_resnet50_fpn(num_classes=NUM_CLASSES + 1)  # +1 for background class
-model.to(DEVICE)
-
-# === Optimizer and Scheduler ===
-optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-
 
 # === Training Loop ===
-def train_one_epoch():
+def train_one_epoch(model, optimizer, scheduler):
     model.train()
     epoch_loss = 0
     for images, targets in train_loader:
@@ -49,7 +38,7 @@ def train_one_epoch():
 
 
 # === Validation Loop ===
-def evaluate_model():
+def evaluate_model(model):
     model.eval()
     total_boxes = 0
     correct_boxes = 0
@@ -75,28 +64,60 @@ def evaluate_model():
 
 
 # === Training Execution ===
-if __name__ == "__main__":
-    print("Starting training...")
+def run_training(mode):
+    print(f"\n========== Training in {mode.upper()} Mode ==========")
+
+    if mode == 'pretrained':
+        print("Loading pre-trained weights from COCO...")
+        model = fasterrcnn_resnet50_fpn(pretrained=True)
+    else:
+        print("Training from scratch with random weights...")
+        model = fasterrcnn_resnet50_fpn(pretrained=False)
+
+    # Adjust for 2 classes (+1 for background)
+    model.roi_heads.box_predictor = torch.nn.Sequential(
+        torch.nn.Linear(1024, NUM_CLASSES + 1),
+        torch.nn.Softmax(dim=1)
+    )
+
+    model.to(DEVICE)
+
+    # Optimizer and Scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+
+    # History Tracking
     history = {'loss': [], 'precision': [], 'recall': []}
 
     for epoch in range(NUM_EPOCHS):
-        print(f"Epoch [{epoch + 1}/{NUM_EPOCHS}]")
-        loss = train_one_epoch()
-        precision, recall = evaluate_model()
+        print(f"\nEpoch [{epoch + 1}/{NUM_EPOCHS}]")
+        loss = train_one_epoch(model, optimizer, scheduler)
+        precision, recall = evaluate_model(model)
 
         history['loss'].append(loss)
         history['precision'].append(precision)
         history['recall'].append(recall)
 
-        # Save checkpoint
-        torch.save(model.state_dict(), MODEL_PATH)
-        print(f"Model saved at {MODEL_PATH}")
+    # Save Model
+    model_path = f'yolov5_boat_bird_{mode}.pth'
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved at {model_path}")
 
-    # Plot metrics
-    plt.figure(figsize=(10, 5))
-    plt.plot(history['loss'], label='Loss')
-    plt.plot(history['precision'], label='Precision')
-    plt.plot(history['recall'], label='Recall')
-    plt.title("Training Metrics Over Time")
-    plt.legend()
-    plt.show()
+    return history
+
+
+# === Run Both Modes ===
+history_pretrained = run_training('pretrained')
+history_scratch = run_training('scratch')
+
+# === Plot Comparison ===
+plt.figure(figsize=(10, 5))
+plt.plot(history_pretrained['loss'], label='Pretrained - Loss', linestyle='--')
+plt.plot(history_scratch['loss'], label='Scratch - Loss')
+plt.plot(history_pretrained['precision'], label='Pretrained - Precision', linestyle='--')
+plt.plot(history_scratch['precision'], label='Scratch - Precision')
+plt.plot(history_pretrained['recall'], label='Pretrained - Recall', linestyle='--')
+plt.plot(history_scratch['recall'], label='Scratch - Recall')
+plt.title("Training Metrics Comparison")
+plt.legend()
+plt.show()
