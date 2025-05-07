@@ -7,6 +7,7 @@ from tqdm import tqdm
 from task1_ResNet import YOLOResNetDetector, BoatBirdDataset
 from yolo_loss import YoloLoss
 import torch.nn.utils.prune as prune
+from torch.cuda.amp import GradScaler, autocast
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -19,6 +20,21 @@ def apply_pruning(model, amount=0.3):
     print("✅ Pruning applied to Conv2d layers")
 
 
+def get_max_batch_size(model, image_size=(416, 416)):
+    """
+    Automatically find the max batch size for the available GPU memory
+    """
+    batch_size = 8
+    while True:
+        try:
+            dummy_input = torch.randn(batch_size, 3, *image_size).to(device)
+            _ = model(dummy_input)
+            batch_size += 8
+        except RuntimeError:
+            print(f"✅ Optimal Batch Size: {batch_size - 8}")
+            return batch_size - 8
+
+
 def train_and_save(pretrained=True, save_dir="models", epochs=20):
     label = 'pretrained' if pretrained else 'scratch'
 
@@ -27,10 +43,13 @@ def train_and_save(pretrained=True, save_dir="models", epochs=20):
     criterion = YoloLoss(S=7, B=2, C=2)
     optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
+    scaler = GradScaler()
     gradient_clip_value = 1.0
 
+    # === Optimal Batch Size Calculation ===
+    optimal_batch_size = get_max_batch_size(model)
     dataset = BoatBirdDataset('./filtered_coco_yolo', split='train')
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=2, pin_memory=True)
+    loader = DataLoader(dataset, batch_size=optimal_batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
     # === Training Loop ===
     model.train()
@@ -42,15 +61,21 @@ def train_and_save(pretrained=True, save_dir="models", epochs=20):
         epoch_loss = 0
         for imgs, targets in pbar:
             imgs, targets = imgs.to(device), targets.to(device)
-            preds = model(imgs)
-            loss = criterion(preds, targets)
+
             optimizer.zero_grad()
-            loss.backward()
+            with autocast():
+                preds = model(imgs)
+                loss = criterion(preds, targets)
+
+            scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_value)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
+
             epoch_loss += loss.item()
             losses.append(loss.item())
             pbar.set_postfix(loss=loss.item())
+
         scheduler.step(epoch_loss)
 
         # Apply pruning every 5 epochs
